@@ -473,3 +473,59 @@ A decoded length header. Used only between the library's own functions.
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `snappy_compress_size`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_compress`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_get_uncompressed_length`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_uncompress`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_read_length`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_uncompress_block`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_compress_block`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |

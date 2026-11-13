@@ -256,3 +256,35 @@ snappy_crc32c(src, crc) -> status
 ## Results
 
 <!-- CI generates the tick table for each function here. -->
+
+### `snappy_frame_compress_size`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_frame_compress`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_frame_uncompress`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
+
+### `snappy_crc32c`
+
+| ISA | Linux | Windows | macOS | `equal` |
+|---|---|---|---|---|
+| x86-64 | ✅ | ✅ | ✅ |  |
+| ARM64 | ✅ | ✅ | ✅ |  |
+| RISC-V | ✅ |  |  |  |
