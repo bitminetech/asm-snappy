@@ -11,8 +11,9 @@
  * bytes after it, and output buffers start filled with 0xA5, so a write out of
  * bounds or a read of old output contents shows up as a failure.
  *
- * Every library call also runs on a painted stack. The runner prints the most
- * stack each function used and fails when a call uses more than the README cap.
+ * Every library call goes through abi_call (tests/runner/abi_<ISA>.s). The
+ * runner prints the most stack each function used, and fails when a call uses
+ * more than the README cap or changes state that the ABI says it must keep.
  */
 #include <stdarg.h>
 #include <stdint.h>
@@ -45,14 +46,19 @@ enum { OK = 0, BUFFER_TOO_SMALL = 1, CORRUPT = 2 };
 #define FILL 0xA5
 
 /*
- * Stack check. paint() fills the stack below the caller with a pattern, then
- * the library call runs in that area, then stack_check() finds the lowest word
- * the call changed. The count starts at the top of the painted area, so it
- * leaves out the few bytes of paint's own frame above it.
+ * ABI and stack check. abi_call sets every register the callee must keep to a
+ * known value and paints PAINT_BYTES of stack below the call. Afterwards it
+ * reports the kept state that changed, and the bytes of stack the call used,
+ * its return address included on x86-64.
  */
 #define STACK_CAP 256 /* README: stack per call */
-#define PAINT_WORDS ((STACK_CAP + 4096) / 8)
-#define PAINT_VALUE 0x5A5A5A5A5A5A5A5AULL
+#define PAINT_BYTES (STACK_CAP + 4096)
+
+/* The record that abi_call reads and writes. The layout is in README.md. */
+typedef struct {
+    uint64_t fn, arg[5], paint, status, fault, stack, scratch[4];
+} abi_ctx;
+SNAPPY_ABI void abi_call(abi_ctx *ctx);
 
 enum { F_COMPRESS_SIZE, F_COMPRESS, F_GET_LENGTH, F_UNCOMPRESS, F_FRAME_COMPRESS_SIZE, F_FRAME_COMPRESS,
        F_FRAME_UNCOMPRESS, F_COUNT };
@@ -60,8 +66,7 @@ static const char *const fn_name[F_COUNT] = {
     "snappy_compress_size",       "snappy_compress",       "snappy_get_uncompressed_length", "snappy_uncompress",
     "snappy_frame_compress_size", "snappy_frame_compress", "snappy_frame_uncompress",
 };
-static volatile uint64_t *paint_low;
-static uint64_t stack_peak[F_COUNT], stack_calls[F_COUNT];
+static uint64_t stack_peak[F_COUNT], stack_calls[F_COUNT], abi_fault[F_COUNT];
 
 /* The functions that the cases of each file kind test, and the files that tested each function. */
 static const int kind_tests[6][F_COUNT] = {
@@ -88,23 +93,23 @@ static void dump_blob(const uint8_t *b, uint64_t n) {
     if (n) fwrite(b, 1, (size_t)n, dump);
 }
 
-__attribute__((noinline)) static void paint(void) {
-    volatile uint64_t area[PAINT_WORDS];
-    for (size_t i = 0; i < PAINT_WORDS; i++) area[i] = PAINT_VALUE;
-    paint_low = area;
-}
-
-__attribute__((noinline)) static uint64_t stack_check(int fn, uint64_t status) {
-    size_t i = 0;
-    while (i < PAINT_WORDS && paint_low[i] == PAINT_VALUE) i++;
-    uint64_t used = 8 * (uint64_t)(PAINT_WORDS - i);
-    if (used > stack_peak[fn]) stack_peak[fn] = used;
+/* Call the library function f with its pointer arguments, through abi_call. */
+static uint64_t checked_call(int fn, uint64_t f, const void *const *args, size_t n) {
+    abi_ctx c;
+    memset(&c, 0, sizeof c);
+    c.fn = f;
+    for (size_t i = 0; i < n; i++) c.arg[i] = (uint64_t)(uintptr_t)args[i];
+    c.paint = PAINT_BYTES;
+    abi_call(&c);
+    if (c.stack > stack_peak[fn]) stack_peak[fn] = c.stack;
     stack_calls[fn]++;
-    return status;
+    abi_fault[fn] |= c.fault;
+    return c.status;
 }
 
-/* Call the library function fn with a stack check. */
-#define CALL(fn, call) (paint(), stack_check(fn, call))
+#define CALL(fn, f, ...)                                                                                       \
+    checked_call(fn, (uint64_t)(uintptr_t)(f), (const void *const[]){__VA_ARGS__},                             \
+                 sizeof((const void *const[]){__VA_ARGS__}) / sizeof(const void *))
 
 static uint64_t rd64(const uint8_t *p) {
     uint64_t v = 0;
@@ -188,14 +193,14 @@ static int check_uncompress(const uint8_t *enc, uint64_t elen, const uint8_t *ra
     uint64_t esize, length = 0, st;
     uint8_t *in = bytelist(enc, elen, 32, 7, &esize);
     int ok = 0;
-    if ((st = CALL(F_GET_LENGTH, snappy_get_uncompressed_length(in, &length))) != OK)
+    if ((st = CALL(F_GET_LENGTH, snappy_get_uncompressed_length, in, &length)) != OK)
         fail(why, "%s: get_uncompressed_length status %llu", what, (unsigned long long)st);
     else if (length != rlen)
         fail(why, "%s: get_uncompressed_length gave %llu, expected %llu", what, (unsigned long long)length,
             (unsigned long long)rlen);
     else {
         uint8_t *out = output(24 + rlen);
-        if ((st = CALL(F_UNCOMPRESS, snappy_uncompress(in, out))) != OK)
+        if ((st = CALL(F_UNCOMPRESS, snappy_uncompress, in, out)) != OK)
             fail(why, "%s: uncompress status %llu", what, (unsigned long long)st);
         else if (rd64(out) != 24 + rlen || rd64(out + 8) != 24 || rd64(out + 16) != rlen)
             fail(why, "%s: uncompress header", what);
@@ -207,7 +212,7 @@ static int check_uncompress(const uint8_t *enc, uint64_t elen, const uint8_t *ra
         free(out);
         if (ok && rlen) {
             out = output(24 + rlen - 1);
-            if ((st = CALL(F_UNCOMPRESS, snappy_uncompress(in, out))) != BUFFER_TOO_SMALL)
+            if ((st = CALL(F_UNCOMPRESS, snappy_uncompress, in, out)) != BUFFER_TOO_SMALL)
                 ok = fail(why, "%s: uncompress one byte short gave %llu", what, (unsigned long long)st);
             else if (!guard_ok(out, 24 + rlen - 1)) ok = fail(why, "%s: uncompress wrote past a short output", what);
             free(out);
@@ -224,7 +229,7 @@ static int check_frame_uncompress(const uint8_t *framed, uint64_t flen, uint64_t
     uint8_t *in = bytelist(framed, flen, 40, 3, &fsize);
     uint8_t *out = output(24 + n);
     int ok = 0;
-    if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress(in, &n, out, &consumed))) != OK)
+    if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress, in, &n, out, &consumed)) != OK)
         fail(why, "%s: frame_uncompress status %llu", what, (unsigned long long)st);
     else if (consumed != want_consumed)
         fail(why, "%s: frame_uncompress consumed %llu, expected %llu", what, (unsigned long long)consumed,
@@ -237,7 +242,7 @@ static int check_frame_uncompress(const uint8_t *framed, uint64_t flen, uint64_t
     free(out);
     if (ok && n) {
         out = output(24 + n - 1);
-        if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress(in, &n, out, &consumed))) != BUFFER_TOO_SMALL)
+        if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress, in, &n, out, &consumed)) != BUFFER_TOO_SMALL)
             ok = fail(why, "%s: frame_uncompress one byte short gave %llu", what, (unsigned long long)st);
         else if (!guard_ok(out, 24 + n - 1)) ok = fail(why, "%s: frame_uncompress wrote past a short output", what);
         free(out);
@@ -252,12 +257,12 @@ static int check_compress(const uint8_t *raw, uint64_t rlen, const char **why) {
     uint8_t *in = bytelist(raw, rlen, 24, 5, &isize);
     int ok = 0;
     uint64_t bound = 32 + rlen + rlen / 6;
-    if ((st = CALL(F_COMPRESS_SIZE, snappy_compress_size(in, &size))) != OK || size != 24 + bound) {
+    if ((st = CALL(F_COMPRESS_SIZE, snappy_compress_size, in, &size)) != OK || size != 24 + bound) {
         free(in);
         return fail(why, "compress_size gave %llu with status %llu", (unsigned long long)size, (unsigned long long)st);
     }
     uint8_t *scr = scratch(SCRATCH_FRAME), *out = output(size);
-    if ((st = CALL(F_COMPRESS, snappy_compress(in, scr, out))) != OK)
+    if ((st = CALL(F_COMPRESS, snappy_compress, in, scr, out)) != OK)
         fail(why, "compress status %llu", (unsigned long long)st);
     else if (rd64(out + 8) != 24 || rd64(out + 16) > bound)
         fail(why, "compress header");
@@ -273,27 +278,27 @@ static int check_compress(const uint8_t *raw, uint64_t rlen, const char **why) {
     if (ok) {
         out = output(size - 1);
         scr = scratch(SCRATCH_COMPRESS);
-        if ((st = CALL(F_COMPRESS, snappy_compress(in, scr, out))) != BUFFER_TOO_SMALL)
+        if ((st = CALL(F_COMPRESS, snappy_compress, in, scr, out)) != BUFFER_TOO_SMALL)
             ok = fail(why, "compress one byte short gave %llu", (unsigned long long)st);
         free(out);
         free(scr);
         out = output(size);
         scr = scratch(SCRATCH_COMPRESS - 8);
-        if (ok && (st = CALL(F_COMPRESS, snappy_compress(in, scr, out))) != BUFFER_TOO_SMALL)
+        if (ok && (st = CALL(F_COMPRESS, snappy_compress, in, scr, out)) != BUFFER_TOO_SMALL)
             ok = fail(why, "compress with a short scratch gave %llu", (unsigned long long)st);
         free(out);
         free(scr);
     }
     if (ok) {
         uint64_t fbound = 10 + rlen + 8 * ((rlen + 65535) / 65536);
-        if ((st = CALL(F_FRAME_COMPRESS_SIZE, snappy_frame_compress_size(in, &size))) != OK || size != 24 + fbound)
+        if ((st = CALL(F_FRAME_COMPRESS_SIZE, snappy_frame_compress_size, in, &size)) != OK || size != 24 + fbound)
             ok = fail(why, "frame_compress_size gave %llu with status %llu", (unsigned long long)size,
                      (unsigned long long)st);
     }
     if (ok) {
         scr = scratch(SCRATCH_FRAME);
         out = output(size);
-        if ((st = CALL(F_FRAME_COMPRESS, snappy_frame_compress(in, scr, out))) != OK)
+        if ((st = CALL(F_FRAME_COMPRESS, snappy_frame_compress, in, scr, out)) != OK)
             ok = fail(why, "frame_compress status %llu", (unsigned long long)st);
         else if (rd64(out + 8) != 24 || rd64(out + 16) > size - 24)
             ok = fail(why, "frame_compress header");
@@ -315,13 +320,13 @@ static int check_compress(const uint8_t *raw, uint64_t rlen, const char **why) {
     if (ok) {
         scr = scratch(SCRATCH_FRAME - 8);
         out = output(size);
-        if ((st = CALL(F_FRAME_COMPRESS, snappy_frame_compress(in, scr, out))) != BUFFER_TOO_SMALL)
+        if ((st = CALL(F_FRAME_COMPRESS, snappy_frame_compress, in, scr, out)) != BUFFER_TOO_SMALL)
             ok = fail(why, "frame_compress with a short scratch gave %llu", (unsigned long long)st);
         free(out);
         free(scr);
         scr = scratch(SCRATCH_FRAME);
         out = output(size - 1);
-        if (ok && (st = CALL(F_FRAME_COMPRESS, snappy_frame_compress(in, scr, out))) != BUFFER_TOO_SMALL)
+        if (ok && (st = CALL(F_FRAME_COMPRESS, snappy_frame_compress, in, scr, out)) != BUFFER_TOO_SMALL)
             ok = fail(why, "frame_compress one byte short gave %llu", (unsigned long long)st);
         free(out);
         free(scr);
@@ -335,7 +340,7 @@ static int run_block_reject(const uint8_t *enc, uint64_t elen, uint64_t want_len
     uint64_t esize, length = 0xDEAD, st;
     uint8_t *in = bytelist(enc, elen, 24, 0, &esize);
     int ok = 1;
-    if ((st = CALL(F_GET_LENGTH, snappy_get_uncompressed_length(in, &length))) != want_length_status)
+    if ((st = CALL(F_GET_LENGTH, snappy_get_uncompressed_length, in, &length)) != want_length_status)
         ok = fail(why, "get_uncompressed_length status %llu, expected %llu", (unsigned long long)st,
                  (unsigned long long)want_length_status);
     else if (st == OK && length != want_length)
@@ -348,7 +353,7 @@ static int run_block_reject(const uint8_t *enc, uint64_t elen, uint64_t want_len
             else want = BUFFER_TOO_SMALL;
         }
         uint8_t *out = output(24 + cap);
-        if ((st = CALL(F_UNCOMPRESS, snappy_uncompress(in, out))) != want)
+        if ((st = CALL(F_UNCOMPRESS, snappy_uncompress, in, out)) != want)
             ok = fail(why, "uncompress status %llu, expected %llu", (unsigned long long)st, (unsigned long long)want);
         else if (!guard_ok(out, 24 + cap) || !guard_ok(in, esize))
             ok = fail(why, "uncompress wrote out of bounds");
@@ -363,7 +368,7 @@ static int run_frame_reject(const uint8_t *framed, uint64_t flen, uint64_t n, ui
     uint8_t *in = bytelist(framed, flen, 24, 0, &fsize);
     uint8_t *out = output(24 + n);
     int ok = 1;
-    if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress(in, &n, out, &consumed))) != want)
+    if ((st = CALL(F_FRAME_UNCOMPRESS, snappy_frame_uncompress, in, &n, out, &consumed)) != want)
         ok = fail(why, "frame_uncompress status %llu, expected %llu", (unsigned long long)st, (unsigned long long)want);
     else if (!guard_ok(out, 24 + n) || !guard_ok(in, fsize))
         ok = fail(why, "frame_uncompress wrote out of bounds");
@@ -473,7 +478,16 @@ int main(int argc, char **argv) {
         failed |= over;
         if (over) fn_failed_files[fn]++;
     }
-    /* One verdict for each function: every file that tests it passed, within the stack cap. */
+    for (int fn = 0; fn < F_COUNT; fn++) {
+        if (!stack_calls[fn]) continue;
+        if (abi_fault[fn])
+            printf("FAIL abi %s: kept state changed, mask 0x%016llx\n", fn_name[fn], (unsigned long long)abi_fault[fn]);
+        else
+            printf("PASS abi %s: kept registers, stack pointer and flags\n", fn_name[fn]);
+        failed |= abi_fault[fn] != 0;
+        if (abi_fault[fn]) fn_failed_files[fn]++;
+    }
+    /* One verdict for each function: every file that tests it passed, within the stack cap and the ABI. */
     for (int fn = 0; fn < F_COUNT; fn++)
         printf("FUNCTION %s %s\n", fn_name[fn], fn_files[fn] && !fn_failed_files[fn] ? "PASS" : "FAIL");
     return failed;

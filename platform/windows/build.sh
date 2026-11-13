@@ -21,6 +21,6 @@ llvm-ar rcsD "$out/libasm-snappy.a.new" "$out/snappy.o"
 mv "$out/libasm-snappy.a.new" "$out/libasm-snappy.a"
 
 /opt/llvm-mingw/bin/$mingw-clang $march -std=c11 -O2 -Wall -Wextra -Werror -static \
-    "$root/tests/runner/runner.c" "$out/libasm-snappy.a" -o "$out/runner.exe"
+    "$root/tests/runner/runner.c" -I"$root/platform/windows" "$root/tests/runner/abi_$isa.s" "$out/libasm-snappy.a" -o "$out/runner.exe"
 /opt/llvm-mingw/bin/$mingw-clang $march -std=c11 -O2 -Wall -Wextra -Werror -static \
     "$root/bench/bench.c" "$out/libasm-snappy.a" -ladvapi32 -o "$out/bench.exe"
