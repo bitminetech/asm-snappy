@@ -275,7 +275,7 @@ snappy_read_length(src, length) -> status
 
 ### Limits
 
-- Stack of its own: none. On x86-64 the call adds its 8 byte return address.
+- Stack of its own: 8 bytes on x86-64 (the return address), 0 bytes on ARM64 and RISC-V.
 
 ### ABI
 
@@ -326,7 +326,7 @@ snappy_uncompress_block(src, dst) -> status
 
 ### Limits
 
-- Stack of its own: none. On x86-64 the call adds its 8 byte return address.
+- Stack of its own: 8 bytes on x86-64 (the return address), 0 bytes on ARM64 and RISC-V.
 
 ### ABI
 
@@ -377,7 +377,7 @@ snappy_compress_block(src, table, cursor) -> status
 
 ### Limits
 
-- Stack of its own: 64 bytes on x86-64, return address included, none on ARM64 and 96 on RISC-V.
+- Stack of its own: 64 bytes on x86-64, return address included, 0 bytes on ARM64 and 96 bytes on RISC-V.
 
 ### ABI
 
