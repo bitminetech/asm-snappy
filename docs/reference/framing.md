@@ -1,5 +1,7 @@
 # Framing format
 
+Framed streams, as in req/resp chunks.
+
 ## Contents
 
 ### Functions

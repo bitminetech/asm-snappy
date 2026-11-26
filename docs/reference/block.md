@@ -1,5 +1,7 @@
 # Block format
 
+Snappy blocks, as in gossip messages.
+
 ## Contents
 
 ### Functions
